@@ -1,0 +1,6 @@
+{
+  "name": "Feeding Frenzy: Shipwreck Showdown",
+  "description": "An action-packed underwater eating survival game. Grow from Boris the Butterflyfish to Goliath the Great White Shark while dodging jellyfish, ink clouds, and naval mines.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
