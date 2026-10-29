@@ -275,35 +275,63 @@
         width: 32px;
         height: 24px;
         border-radius: 4px;
-        background: rgba(0, 0, 0, 0.25);
+        background: rgba(0, 0, 0, 0.35);
         padding: 2px;
+        transition: all 0.25s ease;
       }
-
+      .hierarchy-fish-slot.unlocked-prey {
+        border: 1.5px solid #22c55e;
+        background: rgba(34, 197, 94, 0.2);
+        box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+      }
+      .hierarchy-fish-slot.locked-predator {
+        border: 1.5px dashed rgba(239, 68, 68, 0.65);
+        background: rgba(0, 0, 0, 0.45);
+        opacity: 0.7;
+      }
       .hierarchy-fish-img {
         max-width: 100%;
         max-height: 100%;
         object-fit: contain;
         filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));
       }
-
       .hierarchy-warning-badge {
         position: absolute;
         bottom: -5px;
         right: -5px;
-        width: 16px;
-        height: 16px;
-        background: #facc15;
-        border: 1px solid #78350f;
-        clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+        width: 15px;
+        height: 15px;
+        background: #ef4444;
+        border: 1px solid #7f1d1d;
+        border-radius: 50%;
         display: flex;
         align-items: center;
         justify-content: center;
         font-size: 10px;
         font-weight: 900;
-        color: #000000;
+        color: #ffffff;
         font-family: sans-serif;
         line-height: 1;
         box-shadow: 0 1px 3px rgba(0,0,0,0.9);
+      }
+      .hierarchy-unlocked-badge {
+        position: absolute;
+        bottom: -5px;
+        right: -5px;
+        width: 14px;
+        height: 14px;
+        background: #22c55e;
+        border: 1px solid #14532d;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 9px;
+        font-weight: 900;
+        color: #ffffff;
+        font-family: sans-serif;
+        line-height: 1;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.8);
       }
 
       /* Growth Bar with 3 segments and milestone dividers */
@@ -1112,8 +1140,8 @@
           </div>
 
           <div class="map-buttons-row">
-            <button id="btn-map-swim" class="menu-wood-btn plank-medium" data-start="true">
-              <span class="carved-gold-text">SWIM IN!</span>
+            <button id="btn-map-swim" class="menu-wood-btn plank-medium" data-start="true" title="Start Selected Level">
+              <span class="carved-gold-text">START LEVEL</span>
             </button>
             <button id="btn-map-back" class="menu-wood-btn plank-small">
               <span class="carved-gold-text">MAIN MENU</span>
@@ -1147,7 +1175,7 @@
 
           <div style="display:flex; flex-direction:column; gap:10px; width:100%; max-width:280px;">
             <button id="btn-pause-resume" class="menu-wood-btn plank-medium" data-start="true">
-              <span class="carved-gold-text">RESUME GAME</span>
+              <span class="carved-gold-text">RESUME</span>
             </button>
             <button id="btn-pause-restart" class="menu-wood-btn plank-small">
               <span class="carved-gold-text">RESTART LEVEL</span>
@@ -2279,6 +2307,11 @@
                 this.updateMapSelectionInfo();
                 this.renderNauticalMap();
               });
+              nodeEl.addEventListener('dblclick', () => {
+                this.audio.playButtonWoodClick();
+                this.currentStageIdx = idx;
+                this.startPlaying();
+              });
             }
 
             nodesLayer.appendChild(nodeEl);
@@ -2316,6 +2349,7 @@
           // Reset Player for current stage
           this.player.stage = 1;
           this.player.currentExp = 0;
+          this.player.scalePulse = 1.0;
           this.player.radius = stage.stages[0].radius;
           this.player.x = this.width * 0.5;
           this.player.y = this.height * 0.5;
@@ -2331,6 +2365,8 @@
           this.particles = [];
           this.floatingTexts = [];
 
+          this.updatePlayerScale();
+
           // Gradual initial spawn pacing: seed only 3 slow edible prey fish at level start
           for (let i = 0; i < 3; i++) {
             this.spawnInitialPrey(i, 3);
@@ -2342,21 +2378,92 @@
             this.spawnHazard(true);
           }
 
-          // Create roaming Giant Barracuda boss across deep reef
+          // Create roaming Giant Barracuda boss across deep reef (slow, heavy prowl)
           this.barracudaBoss = {
             x: -450,
             y: this.height * 0.78,
-            vx: 2.2,
+            vx: 1.8,
             vy: 0,
+            targetVx: 1.8,
+            targetVy: 0,
             radius: 80,
             active: true,
+            facingRight: true,
             tailBitten: false,
+            tailBiteTimer: 0,
+            surpriseTimer: 0,
+            retaliateTimer: 0,
             timer: 0
           };
 
           this.updateGrowthUI();
           this.updateHierarchyUI();
           this.updateScoreUI();
+        }
+
+        // --- PROGRESSION, INCREMENTAL SCALING & STRICT TIER HIERARCHY ---
+        getStageProgress() {
+          const stage = STAGES[this.currentStageIdx];
+          const curStageDef = stage.stages[this.player.stage - 1];
+          const prevReq = this.player.stage > 1 ? stage.stages[this.player.stage - 2].reqPoints : 0;
+          const targetReq = curStageDef.reqPoints;
+          return Math.min(1, Math.max(0, (this.player.currentExp - prevReq) / (targetReq - prevReq)));
+        }
+
+        updatePlayerScale() {
+          const stage = STAGES[this.currentStageIdx];
+          const curStageDef = stage.stages[this.player.stage - 1];
+          const nextStageDef = stage.stages[this.player.stage];
+          const stageProgress = this.getStageProgress();
+          const baseRadius = curStageDef.radius;
+          // Smooth progressive physical scaling between current milestone and next milestone
+          const growthSpan = nextStageDef
+            ? (nextStageDef.radius - baseRadius) * 0.72
+            : (baseRadius * 0.40);
+          this.player.radius = baseRadius + growthSpan * stageProgress;
+        }
+
+        canEatTier(tierIdx) {
+          // Strict tier milestone hierarchy check:
+          // Stage 1: Player can ONLY eat Tier 0 prey. Tiers 1, 2, 3 are strictly inedible predators.
+          // Stage 2: Player can eat Tier 0 and Tier 1 prey. Tiers 2 and 3 are predators.
+          // Stage 3: Player can eat Tier 0, 1, and 2. Near apex growth (progress >= 0.85), Tier 3 unlocks!
+          const maxEdibleTier = this.player.stage === 1 ? 0 : (this.player.stage === 2 ? 1 : 2);
+          if (tierIdx <= maxEdibleTier) return true;
+          if (this.player.stage === 3 && this.getStageProgress() >= 0.85 && tierIdx === 3) return true;
+          return false;
+        }
+
+        canEatFish(f) {
+          if (!f) return false;
+          const effFishRadius = this.shrinkTimer > 0 ? f.radius * 0.5 : f.radius;
+          const tierIdx = f.tierIndex !== undefined ? f.tierIndex : 0;
+          // 1. Strict tier milestone hierarchy check
+          if (!this.canEatTier(tierIdx)) return false;
+          // 2. Strict physical size check: player current scaled size must exceed target
+          if (this.player.radius < effFishRadius * 1.05) return false;
+          return true;
+        }
+
+        // Directional Key Points: accurately computes world-space mouth & tail hitboxes
+        getFishKeyPoints(f, effRadius) {
+          const r = effRadius !== undefined ? effRadius : f.radius;
+          const angle = f.angle || 0;
+          const cosA = Math.cos(angle);
+          const sinA = Math.sin(angle);
+          const dir = f.facingRight ? 1 : -1;
+
+          // Mouth / Head zone (front along directional axis)
+          const mouthX = f.x + dir * cosA * (r * 0.92);
+          const mouthY = f.y + sinA * (r * 0.92);
+          const mouthRadius = r * 0.44;
+
+          // Tail zone (rear along directional axis)
+          const tailX = f.x - dir * cosA * (r * 1.05);
+          const tailY = f.y - sinA * (r * 1.05);
+          const tailRadius = r * 0.48;
+
+          return { mouthX, mouthY, mouthRadius, tailX, tailY, tailRadius, dir };
         }
 
         // Dynamic Fish Lineup thumbnails on top of Growth Bar (Zero black boxes)
@@ -2366,9 +2473,10 @@
           container.innerHTML = '';
 
           const stage = STAGES[this.currentStageIdx];
-          stage.fishTiers.forEach((tier) => {
+          stage.fishTiers.forEach((tier, idx) => {
             const slot = document.createElement('div');
-            slot.className = 'hierarchy-fish-slot';
+            const canEat = this.canEatTier(idx) && (this.player.radius >= tier.radius * 0.95);
+            slot.className = `hierarchy-fish-slot ${canEat ? 'unlocked-prey' : 'locked-predator'}`;
 
             // Clean transparent fish thumbnail
             const img = document.createElement('img');
@@ -2389,14 +2497,21 @@
             img.className = 'hierarchy-fish-img';
             slot.appendChild(img);
 
-            // Warning triangle badge for fish that are currently too big/dangerous to eat!
-            const canEat = this.player.radius > tier.radius;
+            // Tier lock warning badge or unlocked check
             if (!canEat) {
               const warn = document.createElement('div');
               warn.className = 'hierarchy-warning-badge';
               warn.innerText = '!';
-              warn.title = `Warning: ${tier.name} is a dangerous predator!`;
+              warn.title = `Warning: ${tier.name} is a dangerous predator! (Unlocks at Milestone ${idx + 1})`;
               slot.appendChild(warn);
+              slot.title = `Locked: ${tier.name} (Requires Milestone ${idx + 1})`;
+            } else {
+              const check = document.createElement('div');
+              check.className = 'hierarchy-unlocked-badge';
+              check.innerText = '✓';
+              check.title = `Edible: ${tier.name}`;
+              slot.appendChild(check);
+              slot.title = `Edible Prey: ${tier.name} (+${tier.score} pts)`;
             }
 
             container.appendChild(slot);
@@ -2404,14 +2519,11 @@
         }
 
         updateGrowthUI() {
-          const stage = STAGES[this.currentStageIdx];
-          const curStageDef = stage.stages[this.player.stage - 1];
-          const prevReq = this.player.stage > 1 ? stage.stages[this.player.stage - 2].reqPoints : 0;
-          const targetReq = curStageDef.reqPoints;
-
-          const progress = Math.min(1, Math.max(0, (this.player.currentExp - prevReq) / (targetReq - prevReq)));
+          const stageProgress = this.getStageProgress();
+          // Map to 3-stage visual trench with 2 dividers at 33.3% and 66.6%
+          const totalProgress = ((this.player.stage - 1) + stageProgress) / 3;
           const liquid = document.getElementById('hud-growth-liquid');
-          if (liquid) liquid.style.width = `${(progress * 100).toFixed(1)}%`;
+          if (liquid) liquid.style.width = `${Math.min(100, Math.max(0, totalProgress * 100)).toFixed(1)}%`;
         }
 
         updateScoreUI() {
@@ -2427,14 +2539,18 @@
           const fromLeft = index % 2 === 0;
           const x = (index + 0.5) * (this.width / total);
           const y = 140 + Math.random() * (this.height - 280);
-          // Slow, passive swimming: 1.0 - 1.4
-          const speed = 1.0 + Math.random() * 0.4;
+          // Lively, engaging natural swimming pace: 1.2 to 1.8 (capped at 2.0 max)
+          const speed = 1.25 + Math.random() * 0.55;
 
           this.fishList.push({
             x,
             y,
             vx: fromLeft ? speed : -speed,
             vy: 0,
+            targetVx: fromLeft ? speed : -speed,
+            targetVy: 0,
+            maxSpeed: 2.0,
+            tierIndex: 0,
             radius: tier.radius,
             spriteKey: tier.spriteKey,
             color: tier.color,
@@ -2449,66 +2565,74 @@
 
         spawnFish() {
           const stage = STAGES[this.currentStageIdx];
-          const curStageDef = stage.stages[this.player.stage - 1];
-          const prevReq = this.player.stage > 1 ? stage.stages[this.player.stage - 2].reqPoints : 0;
-          const growthProgress = Math.min(1, Math.max(0, (this.player.currentExp - prevReq) / (curStageDef.reqPoints - prevReq)));
+          const growthProgress = this.getStageProgress();
 
-          // Count existing predators currently on screen (fish with radius > player)
-          const currentPredators = this.fishList.filter((f) => f.radius > this.player.radius).length;
+          // Count existing predators currently on screen (fish that the player cannot eat yet)
+          const currentPredators = this.fishList.filter((f) => !this.canEatFish(f)).length;
 
-          // Predator constraint:
-          // In Stage 1: MAXIMUM 1 PREDATOR on screen at a time!
+          // Predator constraint per user specification:
+          // In Stage 1: MAXIMUM 1 PREDATOR on screen at a time! (Spawned sparingly)
           // In Stage 2: Maximum 2 predators
           // In Stage 3: Maximum 2 predators
           const maxAllowedPredators = this.player.stage === 1 ? 1 : 2;
 
-          let allowedTiers = [];
+          let chosenTierIdx = 0;
           if (this.player.stage === 1) {
+            // Stage 1: Player can ONLY eat Tier 0 prey. Tier 1 and 2 are predators.
             if (currentPredators >= maxAllowedPredators) {
-              // Only spawn prey that the player can eat!
-              allowedTiers = stage.fishTiers.filter((t) => t.radius < this.player.radius);
-              if (allowedTiers.length === 0) allowedTiers = [stage.fishTiers[0]];
+              chosenTierIdx = 0; // Strict prey spawn
             } else {
-              // Only introduce a predator occasionally (25% chance after 30% growth achieved)
-              if (growthProgress > 0.3 && Math.random() < 0.25) {
-                allowedTiers = stage.fishTiers.filter((t) => t.radius > this.player.radius);
-                if (allowedTiers.length === 0) allowedTiers = [stage.fishTiers[stage.fishTiers.length - 1]];
+              // Occasionally introduce a predator (20% chance after 25% growth achieved)
+              if (growthProgress > 0.25 && Math.random() < 0.22) {
+                chosenTierIdx = Math.random() < 0.8 ? 1 : 2;
               } else {
-                allowedTiers = stage.fishTiers.filter((t) => t.radius < this.player.radius);
-                if (allowedTiers.length === 0) allowedTiers = [stage.fishTiers[0]];
+                chosenTierIdx = 0;
               }
             }
           } else if (this.player.stage === 2) {
+            // Stage 2: Player can eat Tier 0 and Tier 1. Tier 2 and Tier 3 are predators.
             if (currentPredators >= maxAllowedPredators) {
-              allowedTiers = stage.fishTiers.filter((t) => t.radius < this.player.radius);
-              if (allowedTiers.length === 0) allowedTiers = [stage.fishTiers[0], stage.fishTiers[1]];
+              chosenTierIdx = Math.random() < 0.45 ? 0 : 1;
             } else {
-              allowedTiers = stage.fishTiers;
+              if (Math.random() < 0.25) {
+                chosenTierIdx = Math.random() < 0.75 ? 2 : 3;
+              } else {
+                chosenTierIdx = Math.random() < 0.45 ? 0 : 1;
+              }
             }
           } else {
-            // Stage 3 (Apex): Player can eat almost everything
-            allowedTiers = stage.fishTiers;
+            // Stage 3: Player can eat Tiers 0, 1, and 2. Tier 3 unlocks near apex (>=0.85).
+            if (currentPredators >= maxAllowedPredators && growthProgress < 0.85) {
+              chosenTierIdx = Math.floor(Math.random() * 3); // 0, 1, or 2
+            } else {
+              chosenTierIdx = Math.floor(Math.random() * 4); // 0, 1, 2, or 3
+            }
           }
 
-          const tier = allowedTiers[Math.floor(Math.random() * allowedTiers.length)] || stage.fishTiers[0];
+          const tier = stage.fishTiers[chosenTierIdx] || stage.fishTiers[0];
 
           const fromLeft = Math.random() < 0.5;
           const x = fromLeft ? -60 : this.width + 60;
           const y = 90 + Math.random() * (this.height - 200);
 
           // Speed physics constraint:
-          // Small Prey: 1.0 - 1.8 (slow, passive swimming)
-          // Large Predators: 1.2 - 2.2 (slow, heavy, deliberate movement)
-          const isPredator = tier.radius > this.player.radius;
+          // Small Prey: 1.2 to 1.8 (max 2.0) - lively, engaging natural cruising
+          // Medium & Large Predators: 1.5 to 2.2 (max 2.5) - deliberate, menacing prowl
+          const isPredator = !this.canEatTier(chosenTierIdx);
           const speed = isPredator
-            ? (1.2 + Math.random() * 0.95)
-            : (1.0 + Math.random() * 0.75);
+            ? (1.5 + Math.random() * 0.7)
+            : (1.2 + Math.random() * 0.6);
+          const maxSpeedCap = isPredator ? 2.5 : 2.0;
 
           this.fishList.push({
             x,
             y,
-            vx: fromLeft ? speed : -speed,
+            vx: fromLeft ? speed * 0.7 : -speed * 0.7, // Smooth entry acceleration
             vy: 0,
+            targetVx: fromLeft ? speed : -speed,
+            targetVy: 0,
+            maxSpeed: maxSpeedCap,
+            tierIndex: chosenTierIdx,
             radius: tier.radius,
             spriteKey: tier.spriteKey,
             color: tier.color,
@@ -2748,12 +2872,16 @@
             this.player.swimPhase += dt * 5;
           }
 
+          // Smooth scale pulse decay on eating
+          if (this.player.scalePulse && this.player.scalePulse > 1.0) {
+            this.player.scalePulse = Math.max(1.0, this.player.scalePulse - dt * 1.5);
+          }
+
           // Check distance to closest edible prey for anticipatory mouth opening (0.4 radians)
           let minEdibleDist = Infinity;
           for (let i = 0; i < this.fishList.length; i++) {
             const f = this.fishList[i];
-            const effFishRadius = this.shrinkTimer > 0 ? f.radius * 0.5 : f.radius;
-            if (this.player.radius > effFishRadius) {
+            if (this.canEatFish(f)) {
               const d = Math.hypot(this.player.x - f.x, this.player.y - f.y);
               if (d < minEdibleDist) {
                 minEdibleDist = d;
@@ -2774,35 +2902,198 @@
             this.player.mouthOpenAngle = this.player.mouthOpen * 0.4;
           }
 
+          // Calculate player key points for directional mouth & tail interactions
+          const pEffRadius = this.player.radius * (this.player.scalePulse || 1.0);
+          const pPoints = this.getFishKeyPoints(this.player, pEffRadius);
+
           // 3. NPC Fish Updates & Eating Collisions
           for (let i = this.fishList.length - 1; i >= 0; i--) {
             const f = this.fishList[i];
-            f.x += f.vx;
-            f.y += Math.sin(this.time * 1.8 + f.swimPhase) * 0.35;
-            f.swimPhase += dt * 3.5;
 
-            // Smooth directional turning (lerp rotation)
-            f.targetAngle = Math.cos(this.time * 1.8 + f.swimPhase) * 0.08;
-            f.angle = (f.angle || 0) + (f.targetAngle - (f.angle || 0)) * 0.08;
+            // Timers on NPC fish
+            if (f.surpriseTimer > 0) f.surpriseTimer -= dt;
+            if (f.tailBiteTimer > 0) f.tailBiteTimer -= dt;
+            if (f.chompTimer > 0) f.chompTimer -= dt;
+
+            // Retaliation & gradual steering towards player if bit on tail
+            if (f.retaliateTimer > 0) {
+              f.retaliateTimer -= dt;
+              const dirToPlayer = Math.sign(this.player.x - f.x);
+              if (dirToPlayer !== 0) {
+                f.targetVx = dirToPlayer * Math.min(2.3, Math.max(1.5, Math.abs(f.maxSpeed || 2.0)));
+              }
+              // Gentle vertical tracking
+              f.targetVy = Math.max(-0.7, Math.min(0.7, (this.player.y - f.y) * 0.03));
+            } else {
+              // Gentle organic vertical undulating drift
+              f.targetVy = Math.sin(this.time * 1.2 + f.swimPhase) * 0.28;
+            }
+
+            // Heavy damping / friction towards target cruising speed (graceful gliding & turning)
+            const dampRate = Math.min(1.0, dt * 2.2);
+            f.vx += (f.targetVx - f.vx) * dampRate;
+            f.vy += (f.targetVy - f.vy) * dampRate;
+
+            // Strict maximum velocity caps:
+            // Small prey fish: 1.2 - 2.0 max
+            // Medium/large predator fish: 1.5 - 2.5 max
+            const isPredator = !this.canEatFish(f);
+            const maxAllowedSpeed = isPredator ? 2.5 : 2.0;
+            const currentSpeed = Math.hypot(f.vx, f.vy);
+            if (currentSpeed > maxAllowedSpeed) {
+              const capRatio = maxAllowedSpeed / currentSpeed;
+              f.vx *= capRatio;
+              f.vy *= capRatio;
+            }
+
+            // Smooth position update
+            f.x += f.vx;
+            f.y += f.vy;
+
+            // Update facing direction smoothly as fish turns (no instant snap)
+            if (f.vx > 0.08) {
+              f.facingRight = true;
+            } else if (f.vx < -0.08) {
+              f.facingRight = false;
+            }
+
+            // Slow, relaxing swimming tail oscillation
+            f.swimPhase += dt * (1.8 + Math.abs(f.vx) * 1.4);
+
+            // Smooth directional turning & heavy angular damping (never snapping)
+            const targetTilt = Math.atan2(f.vy, Math.abs(f.vx)) * 0.22;
+            f.angle = (f.angle || 0) + (targetTilt - (f.angle || 0)) * (dt * 2.8);
 
             // Offscreen recycling
-            if ((f.vx > 0 && f.x > this.width + 100) || (f.vx < 0 && f.x < -100)) {
+            if ((f.vx > 0 && f.x > this.width + 120) || (f.vx < 0 && f.x < -120)) {
               this.fishList.splice(i, 1);
               continue;
             }
 
-            // Collision with Player
+            // Collision with Player - Strict hierarchy check & accurate size verification
             const effFishRadius = this.shrinkTimer > 0 ? f.radius * 0.5 : f.radius;
-            const d = Math.hypot(this.player.x - f.x, this.player.y - f.y);
 
-            if (d < this.player.radius + effFishRadius) {
-              // EAT PREY!
-              if (this.player.radius > effFishRadius) {
+            if (!isPredator) {
+              // EAT PREY! (Must satisfy both unlocked tier and current scaled radius check)
+              const d = Math.hypot(this.player.x - f.x, this.player.y - f.y);
+              const mouthDist = Math.hypot(pPoints.mouthX - f.x, pPoints.mouthY - f.y);
+              if (mouthDist < pPoints.mouthRadius + effFishRadius || d < this.player.radius * 0.95 + effFishRadius) {
                 this.eatFish(f, i);
-              } 
-              // HIT PREDATOR!
-              else if (this.player.invulnerableTimer <= 0) {
-                this.hitByPredator(`A giant ${f.name} swallowed you whole!`);
+                continue;
+              }
+            } else {
+              // PREDATOR MECHANICS (Directional Mouth Hitbox vs Safe Body & Tail-Bite)
+              const fPoints = this.getFishKeyPoints(f, effFishRadius);
+
+              // 1. DIRECTIONAL MOUTH HITBOX: Only lose life if player collides with predator's mouth/head zone
+              const distToPredMouth = Math.hypot(this.player.x - fPoints.mouthX, this.player.y - fPoints.mouthY);
+              const isMouthCollision = distToPredMouth < fPoints.mouthRadius + this.player.radius * 0.65;
+
+              if (isMouthCollision && this.player.invulnerableTimer <= 0) {
+                // Predator active-eats the player!
+                f.chomping = true;
+                f.chompTimer = 0.35;
+                this.audio.playChomp(Math.max(1.0, f.radius / 22));
+                for (let p = 0; p < 6; p++) {
+                  this.particles.push({
+                    x: fPoints.mouthX,
+                    y: fPoints.mouthY,
+                    vx: (Math.random() - 0.5) * 4,
+                    vy: (Math.random() - 0.5) * 4,
+                    radius: 3,
+                    alpha: 0.9,
+                    color: '#ef4444'
+                  });
+                }
+
+                if (this.hasShield) {
+                  this.hasShield = false;
+                  this.audio.playExplosion();
+                  this.player.invulnerableTimer = 2.0;
+                  this.floatingTexts.push({ x: this.player.x, y: this.player.y - 20, text: 'SHIELD SAVED YOU!', color: '#c084fc', alpha: 1.2 });
+                  const pushAngle = Math.atan2(this.player.y - fPoints.mouthY, this.player.x - fPoints.mouthX);
+                  this.player.x += Math.cos(pushAngle) * 35;
+                  this.player.y += Math.sin(pushAngle) * 35;
+                } else {
+                  this.hitByPredator(`A dangerous ${f.name} devoured you!`);
+                  const pushAngle = Math.atan2(this.player.y - fPoints.mouthY, this.player.x - fPoints.mouthX);
+                  this.player.x += Math.cos(pushAngle) * 30;
+                  this.player.y += Math.sin(pushAngle) * 30;
+                }
+                continue;
+              }
+
+              // 2. TAIL BITING FEATURE ("TAIL BITE! +1000")
+              // If player approaches predator from behind and bites its tail area
+              const distMouthToTail = Math.hypot(pPoints.mouthX - fPoints.tailX, pPoints.mouthY - fPoints.tailY);
+              const distCenterToTail = Math.hypot(this.player.x - fPoints.tailX, this.player.y - fPoints.tailY);
+              const canBiteTail = (distMouthToTail < pPoints.mouthRadius + fPoints.tailRadius) || 
+                                  (distCenterToTail < this.player.radius * 0.75 + fPoints.tailRadius);
+
+              if (canBiteTail && (f.tailBiteTimer || 0) <= 0) {
+                // TAIL BITE SUCCESS!
+                f.tailBiteTimer = 2.5; // Cooldown before next tail bite on this fish
+                this.score += 1000;
+                this.updateScoreUI();
+                this.audio.playChomp(1.2);
+                this.audio.playPowerup();
+
+                // Player chomping reaction
+                this.player.chomping = true;
+                this.player.chompTimer = 0.25;
+                this.player.mouthOpen = 1.0;
+                this.player.scalePulse = 1.18;
+
+                // Floating text & Sparkly bite particles
+                this.floatingTexts.push({
+                  x: fPoints.tailX,
+                  y: fPoints.tailY - 24,
+                  text: 'TAIL BITE! +1000',
+                  color: '#facc15',
+                  alpha: 1.2
+                });
+
+                for (let p = 0; p < 8; p++) {
+                  this.particles.push({
+                    x: fPoints.tailX,
+                    y: fPoints.tailY,
+                    vx: (Math.random() - 0.5) * 5,
+                    vy: (Math.random() - 0.5) * 5,
+                    radius: 2 + Math.random() * 4,
+                    alpha: 1.0,
+                    color: '#facc15'
+                  });
+                }
+
+                // Predator surprised reaction & slow turn around to retaliate
+                f.isSurprised = true;
+                f.surpriseTimer = 1.2;
+                f.retaliateTimer = 4.0;
+                const dirToPlayer = Math.sign(this.player.x - f.x) || (f.facingRight ? -1 : 1);
+                f.targetVx = dirToPlayer * Math.min(2.3, Math.max(1.5, Math.abs(f.maxSpeed || 2.0)));
+                f.targetVy = Math.max(-0.7, Math.min(0.7, (this.player.y - f.y) * 0.035));
+                continue;
+              }
+
+              // 3. SAFE TAIL & BODY COLLISION (No death when touching body/tail from behind or side)
+              const bodyDist = Math.hypot(this.player.x - f.x, this.player.y - f.y);
+              if (bodyDist < this.player.radius + effFishRadius) {
+                // Safe gentle slide/nudge along collision normal - NO DAMAGE
+                const pushAngle = Math.atan2(this.player.y - f.y, this.player.x - f.x);
+                this.player.x += Math.cos(pushAngle) * 1.5;
+                this.player.y += Math.sin(pushAngle) * 1.5;
+
+                if (Math.random() < 0.2) {
+                  this.particles.push({
+                    x: (this.player.x + f.x) * 0.5,
+                    y: (this.player.y + f.y) * 0.5,
+                    vx: (Math.random() - 0.5) * 1.5,
+                    vy: (Math.random() - 0.5) * 1.5,
+                    radius: 2,
+                    alpha: 0.6,
+                    color: '#e0f2fe'
+                  });
+                }
               }
             }
           }
@@ -2923,31 +3214,98 @@
 
           // 6. Roaming Giant Barracuda Boss (Screenshot 5 tail bite feature!)
           if (this.barracudaBoss) {
-            this.barracudaBoss.x += this.barracudaBoss.vx;
-            if (this.barracudaBoss.x > this.width + 300) {
-              this.barracudaBoss.x = -350;
-              this.barracudaBoss.y = 120 + Math.random() * (this.height - 240);
-              this.barracudaBoss.tailBitten = false;
+            const b = this.barracudaBoss;
+            if (b.surpriseTimer > 0) b.surpriseTimer -= dt;
+            if (b.tailBiteTimer > 0) b.tailBiteTimer -= dt;
+
+            // Retaliate steering if bit on the tail
+            if (b.retaliateTimer > 0) {
+              b.retaliateTimer -= dt;
+              const dirX = Math.sign(this.player.x - b.x);
+              if (dirX !== 0) b.targetVx = dirX * 2.2;
+              b.targetVy = Math.max(-0.8, Math.min(0.8, (this.player.y - b.y) * 0.035));
             }
 
-            // Head collision (dangerous!)
-            const headDist = Math.hypot(this.player.x - (this.barracudaBoss.x + 80), this.player.y - this.barracudaBoss.y);
-            if (headDist < this.player.radius + 60 && this.player.invulnerableTimer <= 0) {
-              this.hitByPredator('The Barracuda King devoured you!');
+            const bossDamp = Math.min(1.0, dt * 1.8);
+            b.vx += ((b.targetVx !== undefined ? b.targetVx : b.vx) - b.vx) * bossDamp;
+            b.vy = (b.vy || 0) + ((b.targetVy || 0) - (b.vy || 0)) * bossDamp;
+            b.x += b.vx;
+            b.y += b.vy;
+            b.facingRight = b.vx >= 0;
+
+            if (b.vx > 0 && b.x > this.width + 350) {
+              b.x = -350;
+              b.y = 120 + Math.random() * (this.height - 240);
+              b.vx = 1.8;
+              b.targetVx = 1.8;
+              b.tailBiteTimer = 0;
+            } else if (b.vx < 0 && b.x < -350) {
+              b.x = this.width + 350;
+              b.y = 120 + Math.random() * (this.height - 240);
+              b.vx = -1.8;
+              b.targetVx = -1.8;
+              b.tailBiteTimer = 0;
             }
 
-            // Tail reticle collision (BITE THE TAIL BONUS!)
-            if (!this.barracudaBoss.tailBitten) {
-              const tailX = this.barracudaBoss.x - 120;
-              const tailDist = Math.hypot(this.player.x - tailX, this.player.y - this.barracudaBoss.y);
-              if (tailDist < this.player.radius + 30) {
-                this.barracudaBoss.tailBitten = true;
+            const bPoints = this.getFishKeyPoints(b, b.radius * 1.3);
+
+            // 1. DIRECTIONAL MOUTH HITBOX: devours player ONLY when colliding with mouth/head zone
+            const headDist = Math.hypot(this.player.x - bPoints.mouthX, this.player.y - bPoints.mouthY);
+            if (headDist < bPoints.mouthRadius + this.player.radius * 0.65 && this.player.invulnerableTimer <= 0) {
+              if (this.hasShield) {
+                this.hasShield = false;
+                this.audio.playExplosion();
+                this.player.invulnerableTimer = 2.0;
+                this.floatingTexts.push({ x: this.player.x, y: this.player.y - 20, text: 'SHIELD SAVED YOU!', color: '#c084fc', alpha: 1.2 });
+                const pushAngle = Math.atan2(this.player.y - bPoints.mouthY, this.player.x - bPoints.mouthX);
+                this.player.x += Math.cos(pushAngle) * 40;
+                this.player.y += Math.sin(pushAngle) * 40;
+              } else {
+                this.hitByPredator('The Barracuda King devoured you!');
+                const pushAngle = Math.atan2(this.player.y - bPoints.mouthY, this.player.x - bPoints.mouthX);
+                this.player.x += Math.cos(pushAngle) * 35;
+                this.player.y += Math.sin(pushAngle) * 35;
+              }
+            }
+
+            // 2. TAIL BITING FEATURE (TAIL BITE! +1000)
+            if ((b.tailBiteTimer || 0) <= 0) {
+              const distMouthToTail = Math.hypot(pPoints.mouthX - bPoints.tailX, pPoints.mouthY - bPoints.tailY);
+              const distCenterToTail = Math.hypot(this.player.x - bPoints.tailX, this.player.y - bPoints.tailY);
+              if (distMouthToTail < pPoints.mouthRadius + bPoints.tailRadius || distCenterToTail < this.player.radius * 0.8 + bPoints.tailRadius) {
+                b.tailBiteTimer = 3.5;
+                b.isSurprised = true;
+                b.surpriseTimer = 1.2;
+                b.retaliateTimer = 4.0;
                 this.audio.playChomp(1.2);
                 this.audio.playPowerup();
                 this.score += 1000;
-                this.floatingTexts.push({ x: tailX, y: this.barracudaBoss.y - 20, text: 'TAIL BITE! +1000', color: '#facc15', alpha: 1 });
                 this.updateScoreUI();
+                this.player.chomping = true;
+                this.player.chompTimer = 0.25;
+                this.player.mouthOpen = 1.0;
+                this.player.scalePulse = 1.18;
+                this.floatingTexts.push({ x: bPoints.tailX, y: bPoints.tailY - 24, text: 'TAIL BITE! +1000', color: '#facc15', alpha: 1.2 });
+                for (let p = 0; p < 8; p++) {
+                  this.particles.push({
+                    x: bPoints.tailX,
+                    y: bPoints.tailY,
+                    vx: (Math.random() - 0.5) * 5,
+                    vy: (Math.random() - 0.5) * 5,
+                    radius: 2 + Math.random() * 4,
+                    alpha: 1.0,
+                    color: '#facc15'
+                  });
+                }
               }
+            }
+
+            // 3. SAFE BODY COLLISION: soft push/nudge along collision normal
+            const bossBodyDist = Math.hypot(this.player.x - b.x, this.player.y - b.y);
+            if (bossBodyDist < this.player.radius + b.radius) {
+              const pushAngle = Math.atan2(this.player.y - b.y, this.player.x - b.x);
+              this.player.x += Math.cos(pushAngle) * 1.5;
+              this.player.y += Math.sin(pushAngle) * 1.5;
             }
           }
 
@@ -2982,10 +3340,11 @@
           this.fishList.splice(idx, 1);
           this.fishEatenCount++;
 
-          // Chomp bite snap anim, mouth opening state, & crunchy sound
+          // Chomp bite snap anim, mouth opening state, scale pulse & crunchy sound
           this.player.chomping = true;
           this.player.chompTimer = 0.22;
           this.player.mouthOpen = 1.0;
+          this.player.scalePulse = 1.16; // Reactive pop animation on eating
           this.audio.playChomp(Math.max(0.6, f.radius / 25));
 
           // Spawn chomp crunch bubbles and bite particles
@@ -3041,6 +3400,9 @@
             this.player.thoughtBubbleTimer = 1.4;
           }
 
+          // Incremental physical size expansion as player eats fish!
+          this.updatePlayerScale();
+          this.updateHierarchyUI();
           this.updateScoreUI();
           this.checkGrowthProgress();
         }
@@ -3063,18 +3425,34 @@
             // Milestone reached!
             if (this.player.stage < 3) {
               this.player.stage++;
-              this.player.radius = stage.stages[this.player.stage - 1].radius;
+              this.updatePlayerScale();
               this.audio.playGrowth();
-              this.screenShake = 10;
+              this.screenShake = 14;
               this.floatingTexts.push({
                 x: this.player.x,
-                y: this.player.y - 40,
-                text: 'GROWTH!',
+                y: this.player.y - 45,
+                text: `GROWTH! MILESTONE ${this.player.stage}`,
                 color: '#facc15',
-                alpha: 1.5,
-                scale: 1.8
+                alpha: 1.8,
+                scale: 2.2
               });
+
+              // Evolution burst particles
+              for (let i = 0; i < 16; i++) {
+                const angle = (i * Math.PI * 2) / 16;
+                this.particles.push({
+                  x: this.player.x,
+                  y: this.player.y,
+                  vx: Math.cos(angle) * 5.5,
+                  vy: Math.sin(angle) * 5.5,
+                  radius: 3 + Math.random() * 4,
+                  alpha: 1.0,
+                  color: '#facc15'
+                });
+              }
+
               this.updateHierarchyUI();
+              this.updateGrowthUI();
             } else {
               // Level clear!
               this.triggerVictory();
@@ -3561,15 +3939,15 @@
           }
 
           // Target reticle on tail (Screenshot 5 - classic bitable tail mechanic!)
-          if (!b.tailBitten) {
-            const tailOffset = (b.vx > 0) ? -120 : 120;
+          if ((b.tailBiteTimer || 0) <= 0) {
             ctx.save();
-            ctx.translate(tailOffset, 0);
+            // In native orientation, tail is at (+b.radius * 1.35, 0)
+            ctx.translate(b.radius * 1.35, 0);
             ctx.strokeStyle = '#ef4444';
             ctx.lineWidth = 2.5;
             ctx.beginPath();
-            ctx.arc(0, 0, 20, 0, Math.PI * 2);
-            ctx.arc(0, 0, 10, 0, Math.PI * 2);
+            ctx.arc(0, 0, 24, 0, Math.PI * 2);
+            ctx.arc(0, 0, 12, 0, Math.PI * 2);
             ctx.stroke();
 
             // White center dot
@@ -3580,9 +3958,24 @@
 
             // Sparkling stars
             ctx.fillStyle = '#fef08a';
-            ctx.font = '10px sans-serif';
-            ctx.fillText('✨', 14, -8);
-            ctx.fillText('✨', -18, 12);
+            ctx.font = '12px sans-serif';
+            ctx.fillText('✨', 16, -10);
+            ctx.fillText('✨', -20, 14);
+            ctx.restore();
+          }
+
+          // Surprised reaction when bit on tail
+          if (b.surpriseTimer > 0) {
+            ctx.save();
+            ctx.translate(-b.radius * 0.8, -b.radius * 0.85);
+            if (b.vx > 0) ctx.scale(-1, 1);
+            ctx.fillStyle = '#facc15';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 3;
+            ctx.font = 'bold 22px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.strokeText('!?', 0, 0);
+            ctx.fillText('!?', 0, 0);
             ctx.restore();
           }
 
@@ -3597,6 +3990,7 @@
 
             const r = this.shrinkTimer > 0 ? f.radius * 0.5 : f.radius;
             const sprite = this.sprites[f.spriteKey];
+            const isPredator = !this.canEatFish(f);
 
             // Native sprites face LEFT.
             // If swimming right (facingRight = true), scale(-1, 1) to point right!
@@ -3605,6 +3999,11 @@
               ctx.rotate(-(f.angle || 0));
             } else {
               ctx.rotate(f.angle || 0);
+            }
+
+            // Chomping snap animation when predator active-eats
+            if (f.chompTimer > 0) {
+              ctx.scale(1.15, 0.92);
             }
 
             if (sprite && (sprite.width > 0 || sprite.naturalWidth > 0)) {
@@ -3619,6 +4018,40 @@
               this.drawProceduralFish(ctx, f, r);
             }
 
+            // Tail Bite target reticle on dangerous predators when tail bite is available
+            if (isPredator && (f.tailBiteTimer || 0) <= 0) {
+              ctx.save();
+              // In native coordinates, tail is at (+r * 1.05, 0)
+              ctx.translate(r * 1.05, 0);
+              ctx.strokeStyle = 'rgba(250, 204, 21, 0.85)';
+              ctx.lineWidth = 1.8;
+              ctx.setLineDash([3, 3]);
+              ctx.beginPath();
+              ctx.arc(0, 0, Math.max(10, r * 0.42), 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.fillStyle = '#facc15';
+              ctx.font = 'bold 11px sans-serif';
+              ctx.textAlign = 'center';
+              ctx.fillText('⭐', 0, 4);
+              ctx.restore();
+            }
+
+            // Surprised reaction: cartoon sweatdrop or "!?" above head
+            if (f.surpriseTimer > 0) {
+              ctx.save();
+              ctx.translate(-r * 0.6, -r * 0.95);
+              if (f.facingRight) ctx.scale(-1, 1);
+              ctx.fillStyle = '#facc15';
+              ctx.strokeStyle = '#000000';
+              ctx.lineWidth = 2.5;
+              ctx.font = 'bold 16px sans-serif';
+              ctx.textAlign = 'center';
+              ctx.strokeText('!?', 0, 0);
+              ctx.fillText('!?', 0, 0);
+              ctx.restore();
+            }
+
             ctx.restore();
           }
         }
@@ -3626,15 +4059,15 @@
         drawProceduralFish(ctx, f, r) {
           ctx.save();
           const fishColor = f.color || '#38bdf8';
-          const flutter = Math.sin(this.time * 8 + (f.swimPhase || 0)) * (r * 0.18);
+          const flutter = Math.sin(f.swimPhase || (this.time * 2.5)) * (r * 0.16);
 
-          // Caudal Tail Fin with dynamic swimming flutter
+          // Caudal Tail Fin with dynamic swimming flutter (at positive X: rear)
           ctx.beginPath();
-          ctx.moveTo(-r * 0.7, 0);
-          ctx.quadraticCurveTo(-r * 1.2, -r * 0.5 + flutter, -r * 1.6, -r * 0.7 + flutter);
-          ctx.lineTo(-r * 1.4, flutter * 0.5);
-          ctx.lineTo(-r * 1.6, r * 0.7 + flutter);
-          ctx.quadraticCurveTo(-r * 1.2, r * 0.5 + flutter, -r * 0.7, 0);
+          ctx.moveTo(r * 0.7, 0);
+          ctx.quadraticCurveTo(r * 1.2, -r * 0.5 + flutter, r * 1.6, -r * 0.7 + flutter);
+          ctx.lineTo(r * 1.4, flutter * 0.5);
+          ctx.lineTo(r * 1.6, r * 0.7 + flutter);
+          ctx.quadraticCurveTo(r * 1.2, r * 0.5 + flutter, r * 0.7, 0);
           ctx.closePath();
           ctx.fillStyle = fishColor;
           ctx.fill();
@@ -3644,17 +4077,17 @@
 
           // Dorsal Top Fin
           ctx.beginPath();
-          ctx.moveTo(-r * 0.3, -r * 0.65);
-          ctx.quadraticCurveTo(0, -r * 1.15, r * 0.4, -r * 0.55);
-          ctx.lineTo(r * 0.2, -r * 0.65);
+          ctx.moveTo(r * 0.3, -r * 0.65);
+          ctx.quadraticCurveTo(0, -r * 1.15, -r * 0.4, -r * 0.55);
+          ctx.lineTo(-r * 0.2, -r * 0.65);
           ctx.closePath();
           ctx.fillStyle = fishColor;
           ctx.fill();
 
           // Ventral/Pectoral Fin
           ctx.beginPath();
-          ctx.moveTo(-r * 0.2, r * 0.5);
-          ctx.quadraticCurveTo(0, r * 0.95, r * 0.3, r * 0.45);
+          ctx.moveTo(r * 0.2, r * 0.5);
+          ctx.quadraticCurveTo(0, r * 0.95, -r * 0.3, r * 0.45);
           ctx.closePath();
           ctx.fillStyle = fishColor;
           ctx.fill();
@@ -3674,15 +4107,15 @@
 
           // Gill curve
           ctx.beginPath();
-          ctx.arc(r * 0.1, 0, r * 0.45, Math.PI * 0.6, Math.PI * 1.4);
+          ctx.arc(-r * 0.1, 0, r * 0.45, Math.PI * 0.6, Math.PI * 1.4);
           ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
           ctx.lineWidth = 2;
           ctx.stroke();
 
-          // Cartoon Big Eye
-          const eyeX = r * 0.52;
+          // Cartoon Big Eye (at negative X: front/snout)
+          const eyeX = -r * 0.52;
           const eyeY = -r * 0.22;
-          const eyeR = r * 0.22;
+          const eyeR = (f.surpriseTimer > 0) ? r * 0.32 : r * 0.22;
           // White Sclera
           ctx.beginPath();
           ctx.arc(eyeX, eyeY, eyeR, 0, Math.PI * 2);
@@ -3693,14 +4126,22 @@
           ctx.stroke();
           // Dark Pupil
           ctx.beginPath();
-          ctx.arc(eyeX + eyeR * 0.25, eyeY, eyeR * 0.5, 0, Math.PI * 2);
+          ctx.arc(eyeX - eyeR * 0.25, eyeY, eyeR * 0.5, 0, Math.PI * 2);
           ctx.fillStyle = '#090d16';
           ctx.fill();
           // Specular Reflection glint
           ctx.beginPath();
-          ctx.arc(eyeX + eyeR * 0.4, eyeY - eyeR * 0.25, eyeR * 0.2, 0, Math.PI * 2);
+          ctx.arc(eyeX - eyeR * 0.35, eyeY - eyeR * 0.25, eyeR * 0.22, 0, Math.PI * 2);
           ctx.fillStyle = '#ffffff';
           ctx.fill();
+
+          // Snout / Mouth line
+          ctx.beginPath();
+          ctx.moveTo(-r * 0.95, 0);
+          ctx.lineTo(-r * 0.75, r * 0.08);
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = 1.6;
+          ctx.stroke();
 
           ctx.restore();
         }
@@ -3711,7 +4152,7 @@
             return;
           }
 
-          const r = this.player.radius;
+          const r = this.player.radius * (this.player.scalePulse || 1.0);
           const stage = STAGES[this.currentStageIdx];
           const heroSpriteKey = stage.heroSprite;
           const sprite = this.sprites[heroSpriteKey];
